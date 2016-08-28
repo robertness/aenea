@@ -1,0 +1,13 @@
+Package: aenea
+Type: Package
+Title: Bayes, Big Data, and the Internet
+Version: 0.1.0
+Author: Robert Ness
+Maintainer: Who to complain to <robertness@gmail.com>
+Description: Bayesian approaches to modeling internet data
+License: GPL-3
+LazyData: TRUE
+Depends: dplyr, magrittr, tidyr
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr
