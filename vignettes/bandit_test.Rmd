@@ -1,0 +1,502 @@
+---
+title: "Bayesian Multi-armed Bandits"
+author: "Vignette Author"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, message=FALSE}
+library(aenea)
+```
+
+```{r}
+set.seed(716) # Set the seed of the random number generator 
+```
+## Example 1: Binomial Bandit 
+
+We start by defining two functions to compute optimal probabilities $w_{at}$, via numerical integration and Monte Carlo simulation:
+
+### Setup
+**Method 1: integration**
+Most Bayesians would go straight to Monte Carlo, but nonetheless we start by using R's numerical integration to compute optimal probabilities. http://grab.by/SrEK
+
+Function arguments: *y* is a vector of length k containing what we called $Y_{it}, i = 1...k$, where k is the number of arms. *n* is a vector of length k containing what we called $N_{it}, i = 1...k$.
+
+```{r}
+compute_w_1 <- function(y , n) {
+  k <- length(y) # number of arms
+  out <- numeric(k) # this will contain the probabilities w_{it}
+  for(i in 1:k){
+    idx <- (1:k)[-i]
+    f <- function(x){ # function to be integrated
+      r <- dbeta(x, y[i]+1, n[i]-y[i]+1) # density of a beta r.v.
+      for(j in idx){
+        r <- r*pbeta(x, y[j]+1, n[j]-y[j]+1) # cumulative density function
+      }
+      return(r)
+    }
+    out[i] <- integrate(f, 0, 1)$value
+  }
+  return(out)
+}
+```
+
+**Method 2: Simulation**
+
+The much more common approach is to simulate from the posterior of $\theta_a$ given the observations, then estimate the cdfs evaluated in $\theta_a$ with the empirical frequencies.
+
+Function arguments: *y* is a vector of length k containing what we called $Y_{it}, i = 1...k$. *n* is a vector of length k containing what we called $N_{it}, i = 1...k$. *ndraws*: iterations used in the simulation.
+
+```{r}
+simul_post <- function(y , n, ndraws){ # Sample from the posterior
+  k <- length(y) # nr of arms
+  out <- matrix(nrow = ndraws, ncol = k) 
+  # each row will contain a draw from the posterior of the vector theta
+  no <- n - y
+  for(i in 1:k){
+    out[,i] <- rbeta(ndraws, y[i] + 1, no[i] + 1)
+  }
+  return(out)
+}
+```
+
+We use the function above into the following.  In each row of the matrix, we select the index in 1:k corresponding to the maximum value of $\theta$, that is the average reward in this case.  Then, we compute the absolute frequencies.  We use the functions *max.col()* to find the maximum position for each row of a matrix.  *factor()* along with *table()* to encode a vector as a categorical variable, and count the frequencies for each category.
+
+```{r}
+compute_w_2 <- function(y , n, ndraws) {
+  k <- length(y) # nr of arms
+  post <- simul_post(y, n, ndraws)
+  w <- table(factor(max.col(post)))
+  w/sum(w) # estimated probabilities == relative frequencies
+}
+```
+
+### Experiment: binomial bandit with k = 2 arms
+
+Set the "true" theta for the two arms:
+
+```{r}
+k <- 2
+theta <- runif(k, min = 0, max = 0.3) # it can be randomly chosen
+theta <- c(0.05, 0.15)                  # ..or not
+```
+
+**Data**. Suppose we play Ntot times, 40% of the times with machine 1, the remaining 60% with the machine 2.
+
+```{r}
+Ntot <- 10
+N <- c(0.4*Ntot, 0.6*Ntot)
+```
+
+Suppose then we observe $Y = (Y_1, Y_2)$ number of victories, for the two machines:
+
+```{r}
+(Y <- c(rbinom(1, N[1], theta[1]), rbinom(1, N[2], theta[2])))
+```
+
+Each observation here is a sample from a binomial distribution where N is the number of trials and $\theta$ is the probability of success of each trial.
+
+**Steps of the experiment**
+
+1. Draw the posterior of the two parameters $\theta_1$ and $\theta_2$.  We know that, having assigned a uniform prior, the posterior of each theta is a beta distribution with parameters $(Y_i+1, N_i - Y_i + 1)$
+
+```{r}
+x <- seq(0, 1, length = 200)
+plot(x, dbeta(x, Y[1] + 1, N[1] - Y[1] + 1), 
+     type = 'l', lwd = 2, col = 'darkred', 
+     main = "Posterior of theta = (th1, th2)", 
+     ylab = "Posterior density", 
+     xlab = "Domain of theta",
+     ylim = c(0,5))
+lines(x, dbeta(x, Y[2] + 1, N[2] - Y[2] + 1), 
+      type='l', lwd=2, col='navyblue')
+abline(h = 1, col = 'gray80', lwd = 2, lty = 1)
+text(0.9, 1.1, "Prior", col='gray50')
+abline(v = theta, col = c("darkred","navyblue"), lwd = 3, lty = 2 )
+legend("topright", c("theta_1", "theta_2"), 
+       lwd=2, col=c("darkred","navyblue") )
+```
+
+2. Compute optimal probabilities w.
+
+```{r}
+w1 <- compute_w_1(Y, N) 
+ndraws <- 10000
+w2 <- compute_w_2(Y, N, ndraws) 
+w1; w2
+```
+
+The two estimates are similar but not identical. Both of them are numerical estimates of the probabilities.
+
+Then, following the *randomized probability matching* strategy we would randomly assign the arm to play next according to the above probabilities.  
+
+3. What happens if we increase the number of observations, Ntot?  
+
+We let Ntot, number of observations, vary in 0, 1000 with a step size of 10.
+
+*opt_prob* is a matrix that will contain the estimates of the posterior optimal probabilities of each arm a, a = 1,2.
+
+```{r}
+NTOT <- seq(0, 1000, by = 10)
+opt_prob <- matrix(nrow = length(NTOT), ncol = k)
+for(l in 1:length(NTOT)){
+  N <- c(0.4*NTOT[l], 0.6*NTOT[l])
+  Y <- c(rbinom(1, N[1], theta[1]), rbinom(1, N[2], theta[2]))
+  opt_prob[l,] <- compute_w_1(Y, N) 
+}
+```
+
+Plot the optimality probabilities $w_1t$ and $w_2t$ when t is varying
+```{r}
+plot(NTOT, opt_prob[,1], type = 'l', col = 'darkred', ylim = c(0,1),
+     xlab='Ntot', ylab='Optimal probabilities', lwd = 2)
+lines(NTOT,opt_prob[,2], type='l', col='navyblue', lwd = 2)
+legend("right", c("w_1t", "w_2t"), lwd = 2, 
+       col = c("darkred","navyblue"), cex = 1.2 )
+```
+
+Adding more and more information, the model is able to LEARN and converges to the probabilities (0,1) - $\theta_2$ is greater than $\theta_1$, indeed!
+
+One remark: a priori, the two arms have the same allocation probabilities, since we assigned the same prior for both the $\theta_i$
+
+```{r}
+opt_prob[1,]
+```
+
+4. What happens if the two probabilities are more similar?
+
+Assign the true $\theta$
+
+```{r}
+theta <- c(0.1, 0.11)
+Ntot <- 10
+N <- c(0.4*Ntot, 0.6*Ntot)
+Y <- c(rbinom(1, N[1], theta[1]), rbinom(1, N[2], theta[2]))
+w1 <- compute_w_1(Y, N) 
+w1 
+```
+
+Only ten observations do not provide enough information for a good estimation of the allocation probabilities.  This is trade-off between the utility gain from exploiting arms that appears to be doing well vs exploring arms that might potentially be optimal.
+
+Let's try to increase the observations, as before:
+
+```{r}
+NTOT <- seq(0, 1000, by = 10)
+opt_prob <- matrix(nrow = length(NTOT), ncol = k)
+for(l in 1:length(NTOT)){
+  N <- c(0.4*NTOT[l], 0.6*NTOT[l])
+  Y <- c(rbinom(1, N[1], theta[1]), rbinom(1, N[2], theta[2]))
+  opt_prob[l,] <- compute_w_1(Y, N) 
+}
+```
+
+```{r}
+plot(NTOT, opt_prob[,1], type = 'l', 
+     col = 'darkred', ylim = c(0,1),
+     xlab='Ntot', ylab='Optimal probabilities', lwd = 2)
+lines(NTOT,opt_prob[,2], type='l', col='navyblue', lwd = 2)
+legend("right", c("w_1t", "w_2t"), lwd = 2,
+       col = c("darkred","navyblue"), cex = 1.2 )
+```
+
+Since the two values of theta are similar, the estimation is more difficult and more information is needed to correctly identify the optimal arm.
+
+```{r}
+NTOT <- c(0, 100, 1e3, 1e4, 1e5)
+opt_prob <- matrix(nrow = length(NTOT), ncol = k)
+for(l in 1:length(NTOT)){
+  N <- c(0.4*NTOT[l], 0.6*NTOT[l])
+  Y <- c(rbinom(1, N[1], theta[1]), rbinom(1, N[2], theta[2]))
+  opt_prob[l,] <- compute_w_1(Y, N) 
+}
+round(opt_prob, digits = 4)
+```
+
+Convergence to (0,1) probabilities is reached at 10^4 observations!
+
+4. What happens with k = 5?
+
+```{r}
+k <- 5
+theta <- c(0.001, 0.3, 0.37, 0.4, 0.45)
+Ntot <- 1000
+N <- rep(0.2, k)*Ntot
+N # 200 obs for each machine
+```
+
+Suppose to observe Y number of victories, for the k machines:
+
+```{r}
+Y <- numeric(k)
+for(i in 1:k){
+  Y[i] <- rbinom(1, N[i], theta[i]) 
+  # each observation here is a sample from 
+  # a binomial distribution where N is the number of trials 
+  #and theta is the probability of success of each trial
+}
+Y
+w1 <- compute_w_1(Y, N) 
+round(w1, digits = 4)
+```
+
+Visualizing the posterior:
+
+```{r}
+colors <- rainbow(k)
+x <- seq(0,1,length=200)
+plot(x, dbeta(x, Y[1] + 1, N[1] - Y[1] + 1), type = 'l', 
+     lwd = 2, col = colors[1], 
+     main = "Posterior of theta = (th1, th2)", 
+     ylab = "Posterior density", xlab = '', 
+     ylim = c(0,15))
+for(i in 2:k){
+  lines(x, dbeta(x, Y[i]+1, N[i]-Y[i]+1), type = 'l', lwd = 2, col = colors[i])
+}
+legend("topright", c("theta_1", "theta_2", "theta_3","theta_4","theta_5"), 
+       lwd = 2, col = colors )
+abline(v = theta, col = colors, lty = 2, lwd = 2)
+```
+
+Posterior estimates of the theta_i: posterior mean of a beta distribution
+
+```{r}
+theta_hat = (Y + 1)/(N + 2)
+theta_hat; theta
+```
+
+5. Let's study the expected *regret*: choose the machine according to the randomized probability matching.  Estimate the regret for t in {1, 1000} (test period) and compare it with an equal allocation probabilites (i.e. each machine has the same probability of being choosen)
+
+```{r}
+k <- 2
+theta <- c(0.05, 0.15)
+theta_star <- max(theta)
+```
+
+**Randomized allocation probability**
+
+```{r}
+na <- rep(0, k)  # Will contain # times each arm is played
+ya <- rep(0, k)  # Will contain the output of the games for each machine
+TT <- 1000       # Time period
+L <- rep(0, TT)
+
+for(t in 1:TT){
+  # Compute the weights: (when t = 1, we have the prior)
+  w <- compute_w_1(ya, na)
+  # Choose which arm to play with according 
+  # to the randomized probability matching:
+  a <- sample.int(k, 1, replace = F, prob = w)
+  ynew <- rbinom(1, 1, theta[a]) # the reward is a sample from a bernoulli 
+  # Update information
+  na[a] <- na[a] + 1
+  ya[a] <- ya[a] + ynew
+  # Cumulative Regret:
+  if(t == 1) L[t] = theta_star - theta[a]
+  else L[t] = L[t-1] + (theta_star - theta[a])
+}
+```
+
+**Equal probability of allocation**
+```{r}
+na <- rep(0, k) 
+ya <- rep(0, k)  
+L2 <- rep(0, TT)
+for(t in 1:TT){
+  # Compute the weights: (when t=1, we have the prior)
+  w <- compute_w_1(ya, na)
+  # Choose which arm to play, each with equal probabililty:
+  a <- sample.int(k, 1, replace = F, prob = rep(1/k,k))
+  ynew <- rbinom(1, 1, theta[a]) # sample from a bernoulli 
+  # Update information
+  na[a] <- na[a] + 1
+  ya[a] <- ya[a] + ynew
+  # Cumulative Regret:
+  if(t == 1) L2[t] <- theta_star - theta[a]
+  else L2[t] <- L2[t-1] + (theta_star - theta[a])
+}
+plot(L, pch = 20, xlab='Num iterations', 
+     ylab = "Cumulative expected regret")
+points(L2, col='red', pch = 20)
+legend("bottomright", c("randomized probability matching", 
+                        "equal probability allocation"), 
+       col=c("black","red"), lwd=2)
+```
+
+## Example 2: Poisson Bandit 
+
+First of all, write down a function to compute the allocation probabilities, using SIMULATION to perform the calculation.
+
+EXPERIMENT: poisson bandit with k = 4 arms.  Set the "true" lambda for the arms. Data: suppose to play Ntot times, equally spread among all the arms
+
+```{r}
+k = 4
+lambda = c(5, 7, 7.2, 6.5) 
+Ntot = 16
+N = rep(1/k, k)*Ntot
+```
+
+Suppose to observe Y number of victories, for each arm:
+
+```{r}
+Y = c(sum(rpois(N[1], lambda[1])), 
+      sum(rpois(N[2], lambda[2])),
+      sum(rpois(N[3], lambda[3])),
+      sum(rpois(N[4], lambda[4]))) 
+```
+
+PRIOR:
+suppose non to have any a-priori information about the difference we expect to have an average reward of 2 and variance 10 (non informative) ---> gamma(0.4, 0.2)
+
+0) Draw the prior and the posterior of the parameters.
+
+1) Compute optimal probabilities w with the method of simulation, using the two functions above:
+
+2) Quantify the uncertainty around these estimates by repeating the experiment 100 times: plot the boxplots corresponding to a = 1,2,3,4
+
+3) Study the regret 
+We have k=20 arms, lambda_a = seq(5, 10, len = k)
+
+4) Compare it with the equal probabilty of allocation
+
+5) See what happens varying the parameter k, nr of arms, in {2, 10, 50, 100} 
+
+## The Bandit package
+
+The *bandit* package contains a set of functions for doing analysis of A/B split test data and web metrics in general.  It contains several functions for Bayesian simulation of reward distributions.
+
+```{r, message=FALSE}
+library(bandit)
+x <- c(10,20,30,50)
+n <- c(100,102,120,130)
+arm_probabilities = best_binomial_bandit(x,n)
+print(arm_probabilities)
+paste("The best arm is likely ", which.max(arm_probabilities), ", with ",
+      round(100*max(arm_probabilities), 2), " percent probability of being the best.", sep="")
+best_binomial_bandit(c(2,20),c(100,1000))
+best_binomial_bandit(c(2,20),c(100,1000), alpha = 2, beta = 5)
+```
+
+
+
+
+
+## Bernoulli Arms
+
+### Two case studies for a Bernoulli model of rewards
+* *Optimizing click-through rates for ads*: Every time we show someone an ad, we’ll
+imagine that there’s a fixed probability that they’ll click on the ad. 
+* *Conversion rates for new users*: Every time a new visitor comes to our site who isn’t already a registered user, we’ll imagine that there’s a fixed probability that they’ll register as a user after seeing the landing page.
+
+```{r}
+k <- 5
+arms <- LETTERS[1:k]
+```
+
+```{r}
+alpha <- 1
+beta <- 1
+arm_thetas <- rbeta(k, alpha, beta)
+names(arm_thetas) <- arms
+```
+
+```{r}
+rbern <- function(p) rbinom(1, 1, p)
+rbern(arm_thetas[2])
+```
+
+
+```{r}
+campaign <- data.frame(selected_arm = rep(NA, 100), 
+                       reward = rep(NA, 100))
+selection_probs <- rep(1/k, k)
+for(i in 1:100){
+  # Arm selection depends on selection probabilities...
+  selected_arm <- sample(arms, 1, prob = selection_probs) 
+  campaign$selected_arm[i] <- selected_arm
+  # but reward outcome depends on unknown theta...
+  reward <- arm_thetas[selected_arm] %>% rbern 
+  campaign$reward[i] <- reward
+  # so we update the selection probabilities to match theta
+  selection_probs <- sapply(arms, function(arm){
+    # Vector of trial counts, per arm.
+    n <- sum(campaign[1:i, ]$selected_arm == arm) 
+    # Vector of success counts, per arm.
+    x <- campaign[1:i, ] %>% 
+      filter(selected_arm == arm) %$%
+      reward %>%
+      sum
+    # Calculate posterior mean
+    mean(rbeta(5000, alpha + x, beta + n - x)) 
+  })
+}
+```
+
+```{r}
+plot(arm_thetas, selection_probs, xlab = "true thetas", ylab = "estimates")
+```
+
+## Poisson Arms
+
+### Page visits
+
+Suppose your goal is to increase the number of visits to a particular page on the site.  A user can visit the page more than once during a site visit, so it might be reasonable to model the number of page visits by a user during a site visit as Poisson.
+
+We have k versions of the page, each with a mean of $\lambda_k$ visits.  We assume a prior of $\lambda_k \sim \Gamma(\alpha, \beta)$.  
+
+
+such that the posterior distribution is $\pi(\lambda|y) \equiv \Gamma(\alpha + \sum_i^N y_i, \beta + N)$ where $N$ is the number site visits in the data for the user.
+
+
+```{r}
+k <- 5
+arms <- LETTERS[1:k]
+```
+
+```{r}
+alpha <- 8
+beta <- 1
+arm_lambdas <- rgamma(k, alpha, beta)
+names(arm_lambdas) <- arms
+best_arm <- arms[which.max(arm_lambdas)]
+```
+
+```{r}
+site_visits <- 500
+campaign <- data.frame(selected_arm = rep(NA, site_visits), 
+                       reward = rep(NA, site_visits))
+best_arm_probs <- rep(1/k, k)
+for(i in 1:site_visits){
+  # Arm selection depends on selection probabilities...
+  selected_arm <- sample(arms, 1, prob = best_arm_probs) 
+  campaign$selected_arm[i] <- selected_arm
+    # but reward outcome depends on unknown theta...
+  reward <- arm_lambdas[selected_arm] %>% {rpois(1, lambda = .)} 
+  campaign$reward[i] <- reward
+  # so we update the selection probabilities to match theta
+  best_arm_probs <- sapply(arms, function(arm){
+    # Vector of trial counts, per arm.
+    n <- sum(campaign[1:i, ]$selected_arm == arm) 
+    # Vector of success counts, per arm.
+    x <- campaign[1:i, ] %>% 
+      filter(selected_arm == arm) %$%
+      reward %>%
+      sum
+    # Calculate posterior sample
+    rgamma(5000, alpha + x, beta + n)
+  }) %>% 
+    apply(1, which.max) %>% # Indicator for which is the max
+    {factor(arms[.], levels = arms)} %>%
+    table %>%
+    prop.table # Convert to probabilities
+}
+```
+
+```{r}
+best_arm
+best_arm_probs
+```
+

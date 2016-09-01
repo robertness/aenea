@@ -1,0 +1,238 @@
+---
+title: "Bayesian Structural Time Series"
+author: "Robert Ness"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    fig_width: 6
+    fig_height: 4
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, message = FALSE}
+library(aenea)
+```
+
+
+## Motivation: Modeling monthly airline passenger numbers
+
+```{r}
+air <- log10(AirPassengers)
+time <- 1:length(air)
+months <- time %% 12
+months[months==0] <- 12
+months <- factor(months,label = month.name)
+```
+
+We start by just fitting a few regression models.
+
+```{r}
+reg <- lm(air ~ time + months)
+plot(reg$residuals)
+```
+
+There is a curvilinear trend in the residuals.  Let's attempt to address this with polynomial regression.
+
+```{r}
+reg2 <- lm(air ~ poly(time, 2), months)
+plot(reg2$residuals)
+```
+
+Better, but there lookas to be a change in variation around 70.  Also, there is some cyclic behavior showing up in the autocorrelations.
+
+```{r}
+acf(reg2$residuals)
+```
+
+In standard time series modeling we would continue to expand the model.  The next step in a time series 101 course would be to add a lag variable.  We might then move on to a ARMA to model the autocorrelation and a moving average.  The underlying math in ARMA assumes the response variable is stationary.  If it were not stationary, we could try transforming the data to make it so.  For example, the differences y(t) - y(t-1) might be stationary.  What if we want to add regressors, should we take differences in the regressors?  What if there is more than one nonstationarity (trend + seasonal pattern -- "Y(t) - Y(t-1)"" and "Y(t) - Y(t-k)"?  
+
+Advantages of structural time series: 
+* All the flexibility of regression models (including sparse regression).
+* The locality of ARMA models and smoothing.
+* Can handle non-stationarity without differencing.
+* Modular, so easy combine with other additive components (eg. seasonal trend).
+* All those “smoothing parameters” become variances that can be estimated from data.  
+
+## BTST balances a random walk with stationarity
+
+The following simulation compares samples of an ARIMA process to a random walk.
+
+```{r}
+#ARIMA
+sample_size <- 300
+number_of_series <- 300
+many_ar1 <- matrix(nrow = sample_size, ncol = number_of_series)
+for (i in 1:number_of_series) {
+  many_ar1[, i] <- arima.sim(model = list(ar = .95),
+                             n = sample_size)
+}
+## Random walk
+many_random_walk <- matrix(nrow = sample_size, ncol = number_of_series)
+for (i in 1:number_of_series) {
+  many_random_walk[, i] <- cumsum(rnorm(sample_size))
+}
+plot.ts(many_ar1, main = "Stationary", 
+        ylim = range(many_random_walk), plot.type = "single")
+plot.ts(many_random_walk, main = "Random Walk", 
+        ylim = range(many_random_walk), plot.type = "single")
+```
+
+Plotting together, you see the AR1s all come back to 0, but the random walk spreads away from 0 as you get further in time (nonstationary).
+
+The famous school example for Bayesian hiearchical models demonstrates a compromise between modeling each student as a seperate school and grouping them in one model [@gelman2006data].  Similarly, Bayesian structural time series helps one build a model that balances between stationary and nonstationary components in a time series. You can add in a trend, a seasonal effect, or a regression coefficent.  It is "structural" because you decide what it is going to have in it.  There are many different state components of the tread, seasonal, holiday, and regression categories.
+
+## btst package workflow
+
+Returning to the monthly airline passengers, we build a model with a local linear trend and a seasonal trend.
+
+```{r, message = FALSE}
+library(bsts)
+ss <- AddLocalLinearTrend(
+  list(), ## No previous state specification.
+  air) ## Peek at the data to specify default priors.
+ss <- AddSeasonal(
+  ss, ## Adding state to ss.
+  air, ## Peeking at the data. 
+  nseasons = 12) ## 12 "seasons"
+model <- bsts(air, state.specification = ss, niter = 1000)
+```
+
+Plotting the fit with posterior mean as a line
+
+```{r}
+plot(model)
+#plot(model, "help")
+```
+
+Viewing the posterior mean in terms of each model component.
+
+```{r}
+plot(model, "comp") ## "components"
+#plot(model, "resid") 
+```
+
+Note how zooming in on "seasonal"" reveals some instability in the seasonal component.  Good thing we are using an adaptive model!  The seasonal trend is kind of like random walk for seasons -- the best prediction for the next season is the last season.  So we might be concerned if the troughs were getting troughier and the peaks were getting peakier.
+
+```{r}
+plot(model, "comp", same.scale = FALSE)
+```
+
+Note, you can also specify priors in those above lists.  Boom has a bunch of functions for specififying priors.  They do a bit of error checking and spit out a list that is used by bsts
+
+```{r, eval=FALSE}
+SdPrior(sigma.guess,
+        sample.size = .01,
+        initial.value = sigma.guess,
+        upper.limit = Inf)
+```
+
+SdPrior simulates the inverse variance (then does the transformation).  Upper limit is useful, it truncates the support of the prior (truncated gamma).
+
+### Prediction
+
+Predict the next 24 periods.
+
+```{r}
+pred <- predict(model, horizon = 24)
+plot(pred, plot.original = 36)
+```
+
+## Example 2: Modeling new home sales
+
+```{r}
+data(new.home.sales)
+class(new.home.sales) <- "ts"
+```
+
+I want to model the variable HSN1FNSA, a time series of new home sales in the US, obtained from the FRED online data base.
+
+```{r}
+plot.ts(new.home.sales[, 1], plot.type = "single", xlab = "Month")
+```
+
+### Local Trend
+
+Start by fitting the local trend.  We compare the local level and the local linear trend models.
+
+```{r, message = FALSE}
+local_level <- AddLocalLevel(list(), new.home.sales[, 1])
+local_linear <- AddLocalLinearTrend(list(), new.home.sales[, 1])
+local_level_model <- bsts(new.home.sales[,1], local_level, niter = 1000, data = new.home.sales)
+local_linear_model <- bsts(new.home.sales[,1], local_linear,
+                           niter = 1000, data = new.home.sales)
+CompareBstsModels(list(local_level = local_level_model, 
+                       local_linear = local_linear_model))
+```
+
+The lines in the top graph demonstrate the accumulation of errors for each model.  These are one step prediction errors, which predict the response at each time step given data from the previous time steps.  The prediction full posterior of parameters, partial/one-direction (past states only) posterior of the state.  
+
+The local level model accumulates fewer errors despite being the simpler model.  So we go with this approach.
+
+Trend R Function               | Trend model
+-------------------------------|---------------
+AddAr                          | AR(p)
+AddAutoAr                      | AR(p) + spike-slab prior 
+AddLocalLevel                  | Local level model
+AddLocalLinearTrend            | Local linear trend
+AddStudentLocalLinearTrend     | Robust local linear trend
+AddGeneralizedLocalLinearTrend | LLT with AR(1) slope
+
+### Seasonal trend
+
+Next we'll plot a seasonal trend (see ?AddSeasonal for arguments).
+
+```{r, message = FALSE}
+ss <- AddSeasonal(local_level, new.home.sales[, 1], 12)
+model <- bsts(new.home.sales[, 1], ss, niter = 1000, data = new.home.sales)
+```
+
+Plotting the model shows the data points and overlaps the posterior mean as a line.
+
+```{r}
+plot(model)
+```
+
+The "comp" argument partitians out the model components and plots the posterior distribution over time.
+
+```{r}
+plot(model, "comp")
+```
+
+We can compare our fit to before we added the seasonal trend.
+
+```{r}
+CompareBstsModels(list(no_seasonal = local_level_model, seasonal = model))
+```
+
+The seasonal component is not contributing a great deal, but we leave it in.
+
+### Regression
+
+There are 69 potential regressors in the data.  We include them all and rely on the spike-and-slab prior for regression coefficients to enforce sparcity.  The bsts package will use the spike-and-slab prior by default, with default hyperparameters and settings (see ?SpikeAndSlab), if you do not specify the prior argument by default.
+
+```{r, message = FALSE}
+regression_model <- bsts(HSN1FNSA ~ ., ss, niter = 1000, data = new.home.sales)
+```
+
+We can see the most important parameters by adding the "coef" argument to plot, and limiting the plot to only parameters with an inclusion probability of greater than .1.
+
+```{r}
+plot(regression_model, "coef", inc = .1)
+```
+
+Again, we can see how much each component of the model affects the posterior distribution of the response in time.
+
+```{r}
+plot(regression_model, "comp")
+```
+
+The regression component is having a greater influence than the trend component.
+
+```{r}
+ GDP data
+### Data from
+ ### https://www.federalreserve.gov/econresdata/notes/feds-notes/2016/which-market-in
+ gd

@@ -1,0 +1,55 @@
+---
+title: "Vignette Title"
+author: "Vignette Author"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+One of the basic promises of online advertising is measurement. It is supposed to be easy.  You change something (e.g. increase bid on Google), the look to see how many incremental ad clicks you get.
+
+* Ad clicks and native search clicks interact in complicated ways.
+* Tough to get “incremental clicks” attributable to the ad campaign.
+* Ad clicks can cannibalize native search clicks.
+* Ads have a branding effect that can be hard to measure, drive native search clicks, and outlast the campaign.
+
+To estimate the causal effects of an ad campaign on Google, what do we wish we knew?  Having observed the clicks during the campaign, *what kinds of clicks would we have gotten if we didn't run the campaign?*  This type of question is called a counterfactural.
+
+The following analysis assume you have a time series prior to the intervention (campaign), some predictors that are uneffected by the campaign.  You model the prior time series, predict the counterfactural, and compare the conterfactual to the actual data post intervention.
+
+## Background: Difference in differences
+
+This is an econometric trick
+
+is a statistical technique used in econometrics and quantitative research in the social sciences that attempts to mimic an experimental research design using observational study data, by studying the differential effect of a treatment on a 'treatment group' versus a 'control group' in a natural experiment.[3] It calculates the effect of a treatment (i.e., an explanatory variable or an independent variable) on an outcome (i.e., a response variable or dependent variable) by comparing the average change over time in the outcome variable for the treatment group, compared to the average change over time for the control group. Although it is intended to mitigate the effects of extraneous factors and selection bias, depending on how the treatment group is chosen, this method may still be subject to certain biases (e.g. mean regression, reverse causality and omitted variable bias).
+
+Abadie et al. (2003, 2010) suggested synthetic controls as counterfactuals. I Weighted averages of untreated actors used to forecast actor of
+interest.
+I Weights (0  wi  1) estimated so that “synthetic control” series matches actor’s series in pre-treatment period.
+I Di↵erence from forecast is estimated treatment e↵ect. Good Allows multiple controls, captures temporal e↵ects.
+Bad Scaling issues (California vs. Rhode Island), sign constraints (negative correlations?), other time series?
+Especially problematic for marketing. You know your sales, but not your competitor’s sales.
+
+CausalImpact uses data in the pre-treatment period to build a flexible time series model for the series of interest.
+I Forecast the time series over the intervention period given data from the pre-treatment period.
+I Can use contemporaneous regressors in the forecast.
+I Model fit is based on pre-treatment data.
+I Deviations from the forecast are the “treatment e↵ect.”
+I Assumes “no interference between units.” Often violated. Benign if e↵ect on untreated is small relative to e↵ect on treated.
+
+This line of thinking aligns with the potental outcomes framework
+
+### Example
+
+Start with a local level model (if available you can look at predictors)
+
+Forecast the counterfacture for during and post counterfactural
+
+Visualize causal impact and cummulative total.
+
+The hump is a range of possible values for what the difference might be.  The credible interval defines the period of time where your intervention had a benefit.
+
+You add up the numbers to evaluate the total impact.  

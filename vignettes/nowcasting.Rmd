@@ -1,0 +1,56 @@
+---
+title: "Nowcasting"
+author: "Vignette Author"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+Nowcasting is the task of maintaining "real time"" estimates of infrequently observed time series.
+
+## Motivating example: Unemployment
+
+* US weekly initial claims for unemployment (ICNSA).
+* Recession leading indicator.
+* Can we learn this week’s number before it is released?
+* We’d need a real time signal correlated with the outcome.
+         
+## bsts package
+
+bsts allows us to model time series with both trends and regressors.
+
+Initial claims data:  A weekly time series of US initial claims for unemployment. The first column contains the initial claims numbers from FRED. The others contain a measure of the relative popularity of various search queries identified by Google Correlate.
+
+```{r}
+library(bsts)
+data(iclaims)
+tbl_df(initial.claims)
+```
+
+Add a local trend component and a seasonal component.  I fit a pure time series model, and a model with that additionally includes regressors.
+
+```{r}
+ss <- AddLocalLinearTrend(list(), initial.claims$iclaimsNSA)
+ss <- AddSeasonal(ss, y = initial.claims$iclaimsNSA, nseasons=52)
+pure_ts_model <- bsts(initial.claims$iclaimsNSA, data = initial.claims, 
+              niter = 1000, state.specification = ss)
+reg_model <- bsts(iclaimsNSA ~ ., data = initial.claims, 
+              niter = 1000, state.specification = ss)
+```
+
+The following plot compares models by how they aggregate errors in time.  Both models are adaptive, but if we look at the time around the financial crisis, it seems the model with regressors adapted better to that shock.
+
+```{r}
+CompareBstsModels(list(pure_ts = pure_ts_model, regression = reg_model))
+```
+
+We view the posterior inclusion probabilities of the regressors.
+
+```{r}
+plot(model, "coef")
+```
+
+The idea with this example is that you could get highly correlated regressors from Google Correlate.  Then, using the *predict()* function, you can "nowcast" the current value of response given the current value of the regressors.  An attractive element of this approach is that it assigns higher inclusion probability to predictors that, while not always tracking perfectly with the response, have similar "jumps", i.e. perhaps have associated state changes.

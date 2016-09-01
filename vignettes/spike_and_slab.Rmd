@@ -1,0 +1,32 @@
+---
+title: "Spike and Slab Regression"
+author: "Vignette Author"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    fig_width: 6
+    fig_height: 4
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+Data augmentation 
+integrate out coeffients of posterior for SnS MCMC
+
+
+```{r}
+library(BoomSpikeSlab)
+n <- 500
+x <- rnorm(n)
+largest.x <- which.max(x)
+y <- rnorm(n, 3 - 4.6 * x, 1)
+y[largest.x] <- y[largest.x] * 100 # Big outlier
+## Set expected.model.size large to turn off model selection.
+m1 <- lm.spike(y ~ x, niter = 1000, expected.model.size = 10)
+## Set error.distribution == "student" to get T errors.
+m2 <- lm.spike(y ~ x, niter = 1000, expected.model.size = 10, error.distribution = "student")
+```
+
+Predictive distributions T-models are more robust, compared to the model using GausSian errors, 
