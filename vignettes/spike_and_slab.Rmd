@@ -15,18 +15,149 @@ vignette: >
 Data augmentation 
 integrate out coeffients of posterior for SnS MCMC
 
-
 ```{r}
-library(BoomSpikeSlab)
-n <- 500
-x <- rnorm(n)
-largest.x <- which.max(x)
-y <- rnorm(n, 3 - 4.6 * x, 1)
-y[largest.x] <- y[largest.x] * 100 # Big outlier
-## Set expected.model.size large to turn off model selection.
-m1 <- lm.spike(y ~ x, niter = 1000, expected.model.size = 10)
-## Set error.distribution == "student" to get T errors.
-m2 <- lm.spike(y ~ x, niter = 1000, expected.model.size = 10, error.distribution = "student")
+library(aenea)
 ```
 
-Predictive distributions T-models are more robust, compared to the model using GausSian errors, 
+```{r}
+library(BoomSpikeSlab) # load the library
+require(MCMCpack)
+require(spikeslab)
+```
+
+[@rockova2012hierarchical]
+
+```{r}
+data(reach)
+dataset <- reach
+tbl_df(reach)
+```
+
+```{r}
+num_data = dim(dataset)[1]
+sub_idx = 1:12  
+# the design matrix
+x <- as.matrix(dataset[1:num_data, sub_idx])
+# the response vector
+Y <- as.vector(dataset[1:num_data, ncol(dataset) ]) # ncol(dataset)
+# number of observations
+N <- dim(x)[1]
+N
+# number of covariates
+p <- dim(x)[2]
+p
+```
+
+Visualization of the spike and slab pror for the coefficient.  The spike concentrates the density on 0.  $\tau^2$ determines the spread of the slab.  We'll use equal weights for the spike vs the slab.
+
+```{r}
+attach(dataset)
+tau2 <- 10
+abs <- seq(-5, 5, length = 1001)
+plot(abs, ifelse(abs == 0, 0.5, 0.5 * dnorm(abs, 0, sd = sqrt(tau2))), 
+      type = "l", ylab="", main = "Prior for Beta_k")
+lines(abs, 0.5*dnorm(abs, 0, sd = sqrt(tau2)), 
+      type = "l", lwd = 2, lty = 2, col ="blue", ylab="")
+text(-2,0.5, "slab component", col="blue")
+points(0, 0.5, type = "h", lwd = 2, lty = 2, col ="red", ylab="")
+text(2., 0.5, "spike component", col="red")
+```
+
+## Analysis of the reach data
+
+We start by doing logistic regression with a g-prior.  Zellner's g-prior allows the modeller to introduce information about the location parameter (mean) of the regression while bypassing the most difficult aspects of the prior specification, namely the derivation of the prior correlation structure.  Here, we use the G-prior to set the prior mean and inclusion probability for coefficients of for a model where we prespecify the model size as 6.
+
+
+```{r}
+prior1 <- LogitZellnerPrior(cbind(rep(1,N), x), expected.model.size = 6, 
+                           prior.success.probability = 0.5)
+is(prior1)
+prior1$mu
+prior1$prior.inclusion.probabilities
+```
+
+Now we fit the model.
+
+```{r}
+out_logit <- logit.spike(outcome ~ ., niter = 10000, data = dataset, prior = prior1)
+```
+
+Remark: You can take the fitting output and use it as an input to another call on the model, continuing the chain.  
+
+```{r, eval = FALSE}
+out_logit <- logit.spike(outcome ~ ., niter = 5000, 
+                         data = dataset, initial.value  = out_logit)
+```
+
+## Inclusion probabilities
+
+Raw estimates (ignoring issues like autocorrelation and burn-in)
+
+```{r}
+summary(out_logit$beta[, c("sym", "accp", "bcp_hands", "esr")])
+```
+
+The summary statistics for the coefficients are ordered by inclusion probability.
+
+```{r}
+summary(out_logit)$coefficients
+```
+
+The plot generic also has a convenient method for the *BoomSpikeSlab* model classes:
+
+```{r}
+plot(out_logit, y = "inclusion",  burn = burnin, main = "Inclusion")
+plot(out_logit, y = "coefficients",  burn = burnin, main = "Coefficients")
+plot(out_logit, y = "scaled.coefficients",  burn = burnin, main = "Scaled coeff")
+plot(out_logit, y = "size",  burn = burnin, main = "Size")
+```
+
+The color of the bar is a greyscale corresponding to how much of coefficient's posterior is on the positive (more white) or negative (more black) side of 0.  
+
+## Convergence diagnostics:
+
+The CODA packages is a fantastic tool for checking the convergence of MCMC simulations using summarization and plotting functions.  It also provides some diagnostic tests of the chains convergence to an equilibrium distribution.
+
+```{r}
+library(coda) # load the library for convergence diagnostic
+class(out_logit$beta)
+beta_mcmc <- as.mcmc(out_logit$beta) # transform in a mcmc object, useful for coda
+plot(beta_mcmc[, c("accp", "sym")])
+```
+
+The chains for the low inclusion probability variables are concentrated on 0.  
+
+```{r}
+plot(beta_mcmc[, c("TJC", "age")])
+```
+
+*autocorr.plot* plots the autocorrelation in the chain, giving an other indicator of how well it mixes.
+
+```{r}
+autocorr.plot(beta_mcmc[, c("accp")], auto.layout = FALSE)   
+```
+
+*effectiveSize* estimates how many independent samples you have from your chain.  The higher this number is relative to the length of the chain, the better the sampler performed for that coefficient.
+
+```{r}
+effectiveSize(beta_mcmc) # Sample size adjusted for autocorrelation
+```
+
+Various other statistical diagnostics are available from the interface provided by calling *codamenu()*.
+
+Use *burnin* to discard values in the chain before the point of convergence, and *thinning* to keep one in every k samples.
+
+```{r}
+thinning <- 10
+burnin <- 1000
+dim(out_logit$beta)
+beta_mcmc <- mcmc(out_logit$beta, start = burnin + 1, 
+                  end = dim(beta_mcmc)[1], thin = thinning)
+dim(beta_mcmc)
+plot(beta_mcmc[, c("sym", "accp")])
+autocorr.plot(beta_mcmc[, c("accp", "sym")], auto.layout = FALSE)
+summary(beta_mcmc[, c("sym", "accp", "bcp_hands", "esr")])
+```
+
+
+
